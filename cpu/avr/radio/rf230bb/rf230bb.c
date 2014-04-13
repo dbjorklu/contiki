@@ -41,6 +41,11 @@
 
 #include <stdio.h>
 #include <string.h>
+#if defined(__AVR_ATmega128RFA1__)
+#include "atmega128rfa1_registermap.h"
+#else
+#include "atmega256rfr2_registermap.h"
+#endif
 
 #include "contiki.h"
 
@@ -212,7 +217,7 @@ static unsigned long total_time_for_transmission, total_transmission_len;
 static int num_transmissions;
 #endif
 
-#if defined(__AVR_ATmega128RFA1__)
+#if defined(__AVR_ATmega128RFA1__) || defined(__AVR_ATmega256RFR2__)
 volatile uint8_t rf230_wakewait, rf230_txendwait, rf230_ccawait;
 #endif
 
@@ -222,16 +227,27 @@ uint8_t volatile rf230_pending;
 typedef enum{
     TIME_TO_ENTER_P_ON               = 510, /**<  Transition time from VCC is applied to P_ON - most favorable case! */
     TIME_P_ON_TO_TRX_OFF             = 510, /**<  Transition time from P_ON to TRX_OFF. */
-    TIME_SLEEP_TO_TRX_OFF            = 880, /**<  Transition time from SLEEP to TRX_OFF. */
-    TIME_RESET                       = 6,   /**<  Time to hold the RST pin low during reset */
-    TIME_ED_MEASUREMENT              = 140, /**<  Time it takes to do a ED measurement. */
-    TIME_CCA                         = 140, /**<  Time it takes to do a CCA. */
-    TIME_PLL_LOCK                    = 150, /**<  Maximum time it should take for the PLL to lock. */
-    TIME_FTN_TUNING                  = 25,  /**<  Maximum time it should take to do the filter tuning. */
-    TIME_NOCLK_TO_WAKE               = 6,   /**<  Transition time from *_NOCLK to being awake. */
-    TIME_CMD_FORCE_TRX_OFF           = 1,   /**<  Time it takes to execute the FORCE_TRX_OFF command. */
-    TIME_TRX_OFF_TO_PLL_ACTIVE       = 180, /**<  Transition time from TRX_OFF to: RX_ON, PLL_ON, TX_ARET_ON and RX_AACK_ON. */
-    TIME_STATE_TRANSITION_PLL_ACTIVE = 1,   /**<  Transition time from PLL active state to another. */
+#if defined(__AVR_ATmega256RFR2__)
+  TIME_SLEEP_TO_TRX_OFF            = 240, /**< 240 Transition time from SLEEP to TRX_OFF. */
+#else
+ /* On powerup a TIME_RESET delay is needed here, however on some other MCU reset
+   * (JTAG, WDT, Brownout) the radio may be sleeping. It can enter an uncertain
+   * state (sending wrong hardware FCS for example) unless the full wakeup delay
+   * is done.
+   * Wake time depends on board capacitance; use 2x the nominal delay for safety.
+   * See www.avrfreaks.net/index.php?name=PNphpBB2&file=viewtopic&t=78725
+   */
+   TIME_SLEEP_TO_TRX_OFF            = 2*500, /**<  Transition time from SLEEP to TRX_OFF. */
+#endif
+  TIME_RESET                       = 6,   /**<  Time to hold the RST pin low during reset */
+  TIME_ED_MEASUREMENT              = 140, /**<  Time it takes to do a ED measurement. */
+  TIME_CCA                         = 140, /**<  Time it takes to do a CCA. */
+  TIME_PLL_LOCK                    = 150, /**<  Maximum time it should take for the PLL to lock. */
+  TIME_FTN_TUNING                  = 25,  /**<  Maximum time it should take to do the filter tuning. */
+  TIME_NOCLK_TO_WAKE               = 6,   /**<  Transition time from *_NOCLK to being awake. */
+  TIME_CMD_FORCE_TRX_OFF           = 1,   /**<  Time it takes to execute the FORCE_TRX_OFF command. */
+  TIME_TRX_OFF_TO_PLL_ACTIVE       = 180, /**<  Transition time from TRX_OFF to: RX_ON, PLL_ON, TX_ARET_ON and RX_AACK_ON. */
+  TIME_STATE_TRANSITION_PLL_ACTIVE = 1,   /**<  Transition time from PLL active state to another. */
 }radio_trx_timing_t;
 /*---------------------------------------------------------------------------*/
 PROCESS(rf230_process, "RF230 driver");
@@ -542,7 +558,8 @@ radio_on(void)
 #if RF230BB_CONF_LEDONPORTE1
     PORTE|=(1<<PE1); //ledon
 #endif
-#if defined(__AVR_ATmega128RFA1__)
+
+#if defined(__AVR_ATmega128RFA1__) || defined(__AVR_ATmega256RFR2__)
     /* Use the poweron interrupt for delay */
     rf230_wakewait=1;
     {
@@ -566,7 +583,7 @@ radio_on(void)
  */
 //  uint8_t sreg = SREG;cli();
     hal_set_slptr_low();
-    delay_us(2*TIME_SLEEP_TO_TRX_OFF);
+    delay_us(TIME_SLEEP_TO_TRX_OFF);
 //  SREG=sreg;
 #endif
   }
@@ -769,14 +786,7 @@ rf230_init(void)
   /* Do full rf230 Reset */
   hal_set_rst_low();
   hal_set_slptr_low();
-  /* On powerup a TIME_RESET delay is needed here, however on some other MCU reset
-   * (JTAG, WDT, Brownout) the radio may be sleeping. It can enter an uncertain
-   * state (sending wrong hardware FCS for example) unless the full wakeup delay
-   * is done.
-   * Wake time depends on board capacitance; use 2x the nominal delay for safety.
-   * See www.avrfreaks.net/index.php?name=PNphpBB2&file=viewtopic&t=78725
-   */
-  delay_us(2*TIME_SLEEP_TO_TRX_OFF);
+  delay_us(TIME_SLEEP_TO_TRX_OFF);
   //delay_us(TIME_RESET); /* Old impl. */
   hal_set_rst_high();
 
@@ -894,7 +904,7 @@ rf230_transmit(unsigned short payload_len)
   /* If radio is sleeping we have to turn it on first */
   /* This automatically does the PLL calibrations */
   if (hal_get_slptr()) {
-#if defined(__AVR_ATmega128RFA1__)
+#if defined(__AVR_ATmega128RFA1__) || defined(__AVR_ATmega256RFR2__)
 	ENERGEST_ON(ENERGEST_TYPE_LED_RED);
 #if RF230BB_CONF_LEDONPORTE1
     PORTE|=(1<<PE1); //ledon
@@ -911,7 +921,7 @@ rf230_transmit(unsigned short payload_len)
 #else
     hal_set_slptr_low();
     DEBUGFLOW('j');
-    delay_us(2*TIME_SLEEP_TO_TRX_OFF); //extra delay (2x) depends on board capacitance
+    delay_us(TIME_SLEEP_TO_TRX_OFF); 
 #endif
 
   } else {
@@ -1623,7 +1633,7 @@ rf230_cca(void)
 
   /* Start the CCA, wait till done, return result */
   /* Note reading the TRX_STATUS register clears both CCA_STATUS and CCA_DONE bits */
-#if defined(__AVR_ATmega128RFA1__)
+#if defined(__AVR_ATmega128RFA1__) || defined(__AVR_ATmega256RFR2__)
 #if 1  //interrupt method
     /* Disable rx transitions to busy (RX_PDT_BIT) */
     /* Note: for speed this resets rx threshold to the compiled default */
